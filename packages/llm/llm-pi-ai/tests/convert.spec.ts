@@ -327,6 +327,37 @@ describe('toPiContext', () => {
     expect(context.messages[1]).toMatchObject({ role: 'toolResult', toolCallId: 'c1' })
   })
 
+  it('keeps a four-call message aligned when its last call has an empty name', () => {
+    // The shape a real poisoned Session stored: one assistant message with three
+    // valid parallel calls and a fourth whose name the model returned empty,
+    // followed by the unknown-tool error the loop recorded for that fourth call.
+    const ids = ['c1', 'c2', 'c3'] as const
+    const context = toPiContext({
+      provider: 'magpie',
+      model: 'group/deepseek-flash',
+      messages: [
+        createMessage({
+          role: 'assistant',
+          content: [
+            ...ids.map(id => ({ type: 'tool-call' as const, id: ToolCallId(id), name: 'bash', arguments: '{}' })),
+            { type: 'tool-call', id: ToolCallId('c4'), name: '', arguments: '{}' },
+          ],
+          source: { kind: 'model', provider: 'magpie', model: 'group/deepseek-flash' },
+        }),
+        ...ids.map(id => createToolResultMessage({ callId: ToolCallId(id), content: [{ type: 'text', text: 'ok' }], isError: false })),
+        createToolResultMessage({ callId: ToolCallId('c4'), content: [{ type: 'text', text: 'Error: unknown tool \"\"' }], isError: true }),
+      ],
+    })
+    expect(context.messages).toHaveLength(4)
+    expect(context.messages[0]).toMatchObject({
+      role: 'assistant',
+      stopReason: 'toolUse',
+      content: ids.map(id => ({ type: 'toolCall', id, name: 'bash' })),
+    })
+    expect(context.messages.slice(1).map(message => message.role === 'toolResult' ? message.toolCallId : message.role))
+      .toEqual(ids)
+  })
+
   it('drops an empty-name tool call from replayed history, keeping aligned replay metadata', () => {
     const requestedModel = 'deepseek-v4-flash'
     const message = createMessage({

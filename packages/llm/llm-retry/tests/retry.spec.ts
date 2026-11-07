@@ -2,7 +2,7 @@ import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { Fiber } from '@deepseek-ai/cordis'
-import LlmRuntime, { createUserMessage, ToolCallId, EMPTY_RESPONSE_CODE, LlmAdapter, LlmError, expandAssistantStream, resolveRetryPolicy  } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, ToolCallId, EMPTY_RESPONSE_CODE, LlmAdapter, LlmError, MALFORMED_TOOL_CALL_CODE, expandAssistantStream, resolveRetryPolicy  } from '@deepseek-ai/dsh-llm'
 import type {
   AlwaysRetryPolicyConfig,
   BackoffConfig,
@@ -285,6 +285,47 @@ describe('provider-routed retry policy', () => {
     expect(agent.session.deriveMessages().at(-1)).toMatchObject({
       role: 'assistant',
       content: [{ type: 'text', text: 'recovered' }],
+    })
+  })
+
+  it('retries a MALFORMED_TOOL_CALL error finish under the default retryable codes', async () => {
+    vi.useFakeTimers()
+    // The pi-ai adapter refuses a malformed model-side tool call as a finish-chunk
+    // error; the default policy must re-roll that step instead of ending the turn.
+    const adapter = new ScriptedAdapter([
+      [
+        { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } },
+        {
+          type: 'finish',
+          reason: {
+            kind: 'error',
+            failure: { message: 'Tool call "bash": the model returned an empty tool name', code: MALFORMED_TOOL_CALL_CODE },
+          },
+        },
+      ],
+      textResponse('recovered'),
+    ])
+    ;({ ctx: context } = await harness(adapter))
+    const agent = await context.agentLoop.create(SessionId('retry-malformed-tool-call'), { provider: 'mock', model: 'mock' })
+    const scheduled = waitForRetry(context, agent, 1)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    const event = await scheduled
+    expect(event.data.failure).toEqual({
+      message: 'Tool call "bash": the model returned an empty tool name',
+      code: MALFORMED_TOOL_CALL_CODE,
+    })
+
+    const idle = waitForIdle(context, agent)
+    await vi.advanceTimersByTimeAsync(500)
+    await idle
+
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.deriveMessages().at(-1)).toEqual({
+      id: expect.any(String) as unknown,
+      role: 'assistant',
+      content: [{ type: 'text', text: 'recovered' }],
+      source: { kind: 'model', provider: 'mock', model: 'mock' },
     })
   })
 
