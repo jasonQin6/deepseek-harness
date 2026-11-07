@@ -1,6 +1,6 @@
 /** Translate Messages events while preserving block order and cumulative usage. */
 
-import { LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { LlmError, MALFORMED_RESPONSE_CODE, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { object, replayState } from './replay.ts'
 import type { ReplayBlock } from './replay.ts'
@@ -18,12 +18,12 @@ interface Block {
  * @returns the validated string.
  */
 export function string(value: unknown): string {
-  if (typeof value !== 'string') throw new LlmError('DeepSeek Messages expected a string field', 'MALFORMED_RESPONSE')
+  if (typeof value !== 'string') throw new LlmError('DeepSeek Messages expected a string field', MALFORMED_RESPONSE_CODE)
   return value
 }
 
 function malformed(detail: string): never {
-  throw new LlmError(`DeepSeek Messages stream: ${detail}`, 'MALFORMED_RESPONSE')
+  throw new LlmError(`DeepSeek Messages stream: ${detail}`, MALFORMED_RESPONSE_CODE)
 }
 
 function indexOf(event: Record<string, unknown>): number {

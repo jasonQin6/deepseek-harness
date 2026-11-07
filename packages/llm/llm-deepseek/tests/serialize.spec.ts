@@ -242,6 +242,45 @@ describe('Messages request conversion', () => {
     expect(body([assistant([call()]), minimal]).messages[1]?.content[0]).toEqual({ type: 'tool_result', tool_use_id: 'a', content: [] })
   })
 
+  it('drops a stored empty-name tool call and the result that answered it', () => {
+    // The shape a poisoned pi-ai session leaves in its Session log: three valid
+    // parallel calls plus a fourth whose name the model returned empty, and the
+    // unknown-tool error the loop recorded for it.
+    const history = [
+      user(),
+      assistant([
+        call('a'), call('b'),
+        { type: 'tool-call', id: ToolCallId('empty'), name: '', arguments: '{}' },
+      ]),
+      result('a'),
+      result('b'),
+      createToolResultMessage({ callId: ToolCallId('empty'), content: [{ type: 'text', text: 'Error: unknown tool ""' }], isError: true }),
+    ]
+    const saved = JSON.stringify(history)
+
+    expect(body(history).messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'assistant', content: ['a', 'b'].map(id => ({ type: 'tool_use', id, name: 'read', input: { path: 'a' } })) },
+      { role: 'user', content: ['a', 'b'].map(id => ({
+        type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: 'result' }], is_error: false,
+      })) },
+    ])
+    expect(JSON.stringify(history)).toBe(saved)
+  })
+
+  it('omits an assistant message left with only an empty-name tool call', () => {
+    const request = body([
+      user(),
+      assistant([{ type: 'tool-call', id: ToolCallId('empty'), name: '', arguments: '{}' }]),
+      user('next'),
+      assistant([{ type: 'text', text: 'answer' }]),
+    ])
+    expect(request.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'hello' }, { type: 'text', text: 'next' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
+    ])
+  })
+
   it('omits assistant-only blocks from user input while preserving text and durable content', () => {
     const history = [createMessage({ role: 'user', source: { kind: 'user' }, content: [
       { type: 'text', text: 'Background subagent finished.\n' },

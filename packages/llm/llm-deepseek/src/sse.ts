@@ -1,7 +1,7 @@
 /** SSE framing delegated to eventsource-parser; JSON errors remain provider failures. */
 
 import { EventSourceParserStream } from 'eventsource-parser/stream'
-import { LlmError } from '@deepseek-ai/dsh-llm'
+import { LlmError, MALFORMED_RESPONSE_CODE } from '@deepseek-ai/dsh-llm'
 import { object } from './replay.ts'
 import { providerError } from './transport.ts'
 
@@ -16,11 +16,11 @@ export async function* parseSse(body: ReadableStream<BufferSource>, activity: ()
     activity()
     let raw: unknown
     try { raw = JSON.parse(frame.data) } catch (_invalidSseJson) {
-      throw new LlmError('DeepSeek Messages SSE contains invalid JSON', 'MALFORMED_RESPONSE')
+      throw new LlmError('DeepSeek Messages SSE contains invalid JSON', MALFORMED_RESPONSE_CODE)
     }
     const event = object(raw)
     if (typeof event.type !== 'string' || (frame.event !== undefined && frame.event !== event.type)) {
-      throw new LlmError('DeepSeek Messages SSE event type mismatch', 'MALFORMED_RESPONSE')
+      throw new LlmError('DeepSeek Messages SSE event type mismatch', MALFORMED_RESPONSE_CODE)
     }
     if (event.type === 'error') throw providerError(event, undefined)
     yield event

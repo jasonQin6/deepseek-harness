@@ -23,6 +23,11 @@ function toolInput(raw: string): Record<string, unknown> {
     : {}
 }
 
+/** Whether one durable block is a tool call no route can execute or name on the wire. */
+function isEmptyNameToolCall(block: ContentBlock): boolean {
+  return block.type === 'tool-call' && block.name.length === 0
+}
+
 function assistant(message: Message, model: string, onReplayDegrade?: (reason: string) => void): WireBlock[] {
   const replay = readReplay(message, model, onReplayDegrade)
   return message.content.flatMap((block, index): WireBlock | WireBlock[] => {
@@ -32,7 +37,9 @@ function assistant(message: Message, model: string, onReplayDegrade?: (reason: s
         type: 'thinking', thinking: block.text,
         ...replay?.[index]?.signature === undefined ? {} : { signature: replay[index].signature },
       }
-      case 'tool-call': return { type: 'tool_use', id: block.id, name: block.name, input: toolInput(block.arguments) }
+      case 'tool-call': return isEmptyNameToolCall(block)
+        ? []
+        : { type: 'tool_use', id: block.id, name: block.name, input: toolInput(block.arguments) }
       default: return unsupported(`assistant content ${block.type}`)
     }
   })
@@ -80,6 +87,9 @@ export function serialize(
   const messages: WireMessage[] = []
   let historySystem: string | undefined
   const systemUpdates: WireMessage[] = []
+  // Ids of stored empty-name calls omitted from this request, so their
+  // orphaned results can go with them.
+  const droppedCalls = new Set<string>()
   // Harness admits system updates before user input. Messages places the same
   // update after that user/tool-result turn and before the next assistant.
   const flushSystemUpdates = () => {
@@ -115,6 +125,15 @@ export function serialize(
       }
       continue
     }
+    if (message.role === 'assistant') {
+      for (const block of message.content) {
+        if (block.type !== 'tool-call') continue
+        if (isEmptyNameToolCall(block)) droppedCalls.add(block.id)
+      }
+    }
+    // A result whose call was dropped as unexecutable must go with it: Messages
+    // rejects an output without its call, and the durable Session keeps both.
+    if (message.role === 'tool' && droppedCalls.has(message.toolCallId)) continue
     const content: WireBlock[] = message.role === 'assistant'
       ? assistant(message, options.model, onReplayDegrade)
       : message.role === 'tool'
