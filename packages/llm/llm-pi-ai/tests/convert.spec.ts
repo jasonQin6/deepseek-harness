@@ -302,6 +302,79 @@ describe('toPiContext', () => {
     })
   })
 
+  it('drops a persisted empty-name tool call and its orphaned result from foreign history', () => {
+    const context = toPiContext({
+      provider: 'deepseek',
+      model: 'm',
+      messages: [
+        createMessage({
+          role: 'assistant',
+          content: [
+            { type: 'tool-call', id: ToolCallId('c1'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: ToolCallId('c2'), name: '', arguments: '{}' },
+          ],
+          source: { kind: 'model', provider: 'deepseek', model: 'm' },
+        }),
+        createToolResultMessage({ callId: ToolCallId('c1'), content: [{ type: 'text', text: 'ok' }], isError: false }),
+        createToolResultMessage({ callId: ToolCallId('c2'), content: [{ type: 'text', text: 'Error: unknown tool' }], isError: true }),
+      ],
+    })
+    expect(context.messages).toHaveLength(2)
+    expect(context.messages[0]).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'c1', name: 'bash' }],
+    })
+    expect(context.messages[1]).toMatchObject({ role: 'toolResult', toolCallId: 'c1' })
+  })
+
+  it('drops an empty-name tool call from replayed history, keeping aligned replay metadata', () => {
+    const requestedModel = 'deepseek-v4-flash'
+    const message = createMessage({
+      role: 'assistant',
+      content: [
+        { type: 'tool-call', id: ToolCallId('c1'), name: 'bash', arguments: '{}' },
+        { type: 'tool-call', id: ToolCallId('c2'), name: '', arguments: '{}' },
+      ],
+      source: {
+        kind: 'model',
+        provider: 'deepseek',
+        model: requestedModel,
+        replayState: toPiReplayState(assistant({
+          stopReason: 'toolUse',
+          content: [
+            { type: 'toolCall', id: 'c1', name: 'bash', arguments: {}, thoughtSignature: 'sig-c1' },
+            { type: 'toolCall', id: 'c2', name: '', arguments: {} },
+          ],
+        }), requestedModel),
+      },
+    })
+    const context = toPiContext({ provider: 'deepseek', model: requestedModel, messages: [message] })
+    expect(context.messages).toHaveLength(1)
+    expect(context.messages[0]).toMatchObject({
+      api: 'openai-completions',
+      content: [{ type: 'toolCall', id: 'c1', name: 'bash', thoughtSignature: 'sig-c1' }],
+    })
+  })
+
+  it('keeps an all-calls-dropped replayed assistant as a stop, not an empty toolUse', () => {
+    const requestedModel = 'deepseek-v4-flash'
+    const message = createMessage({
+      role: 'assistant',
+      content: [{ type: 'tool-call', id: ToolCallId('c2'), name: '', arguments: '{}' }],
+      source: {
+        kind: 'model',
+        provider: 'deepseek',
+        model: requestedModel,
+        replayState: toPiReplayState(assistant({
+          stopReason: 'toolUse',
+          content: [{ type: 'toolCall', id: 'c2', name: '', arguments: {} }],
+        }), requestedModel),
+      },
+    })
+    const context = toPiContext({ provider: 'deepseek', model: requestedModel, messages: [message] })
+    expect(context.messages[0]).toMatchObject({ stopReason: 'stop', content: [] })
+  })
+
   it('labels unmatched tool results with toolName unknown and keeps isError', () => {
     const context = toPiContext({
       provider: 'deepseek',
@@ -824,6 +897,27 @@ describe('toStreamChunks', () => {
     expect(chunks[1]).toEqual({ type: 'tool-call-delta', index: 0, id: '', argumentsDelta: '{}' })
   })
 
+  it('refuses an empty-name tool call as MALFORMED_TOOL_CALL without emitting its block', async () => {
+    const unnamed = { type: 'toolCall' as const, id: 'call-1', name: '', arguments: {} }
+    const partial = assistant({ content: [unnamed] })
+    const stream = toStreamChunks(feed(
+      { type: 'toolcall_start', contentIndex: 0, partial },
+      { type: 'toolcall_delta', contentIndex: 0, delta: '{}', partial },
+      { type: 'toolcall_end', contentIndex: 0, toolCall: unnamed, partial },
+      { type: 'done', reason: 'toolUse', message: assistant({ content: [unnamed], stopReason: 'toolUse' }) },
+    ))
+    const chunks: StreamChunk[] = []
+    let failure: (Error & { code?: string }) | undefined
+    try {
+      for await (const chunk of stream) chunks.push(chunk)
+    } catch (error) {
+      failure = error as Error & { code?: string }
+    }
+    expect(failure?.code).toBe('MALFORMED_TOOL_CALL')
+    expect(failure?.message).toContain('empty tool name')
+    expect(chunks.filter(chunk => chunk.type === 'block-end')).toEqual([])
+  })
+
   it('maps error events to error finish chunks (in-stream error style)', async () => {
     const error = assistant({ stopReason: 'error', errorMessage: 'boom', usage: usage(1, 0) })
     const chunks = await collect(toStreamChunks(feed(
@@ -936,6 +1030,20 @@ describe('mapStopReason / mapUsage', () => {
       stopReason: 'error',
       errorMessage: 'vector length limit exceeded',
     }))).toMatchObject({ kind: 'error', failure: { code: 'PI_AI_ERROR' } })
+  })
+
+  it('maps transient wording only pi-ai recognizes (overloaded gateways) to SERVER', () => {
+    // A magpie-style relay error: no status digits, no "rate limit" — every
+    // ladder pattern misses it, but pi-ai's retryable pattern reads
+    // "overloaded"/"upstream request failed" and asks for another attempt.
+    expect(mapStopReason(assistant({
+      stopReason: 'error',
+      errorMessage: 'server_error: OpenCode Go: Upstream request failed: [overloaded] the server is overloaded; retry shortly',
+    }))).toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
+    expect(mapStopReason(assistant({
+      stopReason: 'error',
+      errorMessage: 'unable to forward upstream',
+    }))).toMatchObject({ kind: 'error', failure: { code: 'SERVER' } })
   })
 
   it.each([

@@ -129,14 +129,24 @@ export class BlockAssembler {
 
   /**
    * The one shared keep/drop decision over all seen blocks: max-token
-   * truncation drops tool calls that cannot be executed safely. Emitted blocks
-   * and replay metadata both derive from this result, so they cannot disagree.
+   * truncation drops tool calls that cannot be executed safely, and an
+   * empty-name tool call is dropped whatever the finish — it cannot be
+   * executed, and persisting it poisons every later replay of the history.
+   * Emitted blocks and replay metadata both derive from this result, so they
+   * cannot disagree.
+   *
+   * An adapter that lets a whole response collapse to nothing here (its every
+   * block dropped) yields `blocks() === []`; the ingest guards make that
+   * unreachable for pi-ai, which refuses empty names as `MALFORMED_TOOL_CALL`
+   * before a block exists. Other adapters keep their pre-existing behavior.
    */
   private assembled(): { blocks: ContentBlock[]; replay: ReplayEnvelope | undefined } {
     const all = this.order.map(index => this.assemble(this.mustGet(index), index))
-    const kept = this.finish.kind === 'max-tokens'
-      ? all.map(block => block.type !== 'tool-call')
-      : undefined
+    const isEmptyNameToolCall = (block: ContentBlock): boolean =>
+      block.type === 'tool-call' && block.name.length === 0
+    const keep = (block: ContentBlock): boolean =>
+      this.finish.kind === 'max-tokens' ? block.type !== 'tool-call' : !isEmptyNameToolCall(block)
+    const kept = all.some(block => !keep(block)) ? all.map(keep) : undefined
     const blocks = kept === undefined ? all : all.filter((_, position) => kept[position])
     const envelope = this._replayState
     if (envelope?.blocks === undefined) return { blocks, replay: envelope }

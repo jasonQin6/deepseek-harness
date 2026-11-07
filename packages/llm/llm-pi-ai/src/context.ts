@@ -4,7 +4,6 @@
  * @module dsh-llm-pi-ai/context
  */
 
-import { brandString } from '@deepseek-ai/dsh-brand'
 import { contentHasImage, IMAGE_OFFLOAD_REQUIRED_CODE, LlmError, offloadedImageText, projectOffloadedImages, requestImageHandleText, requiredImageOffload } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, ImageAttachmentAccessResolver, Message, RequestMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {
@@ -15,7 +14,7 @@ import type {
   RequestImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import type { Context as PiContext, ImageContent, Message as PiMessage, SystemMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
-import { toPiAssistant } from './replay.ts'
+import { isEmptyNameToolCall, toPiAssistant } from './replay.ts'
 import { requestImageDimensions } from '@deepseek-ai/dsh-attachment'
 import { DEFAULT_REQUEST_IMAGE_MAX_BYTES, DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET } from './config.ts'
 
@@ -204,12 +203,20 @@ function appendAssistant(
   message: Extract<Message, { role: 'assistant' }>,
   messages: PiMessage[],
   toolNames: Map<ToolCallId, string>,
+  droppedToolCalls: Set<ToolCallId>,
   onReplayDegrade?: (reason: string) => void,
 ): void {
-  const assistant = toPiAssistant(message, onReplayDegrade)
-  for (const block of assistant.content) {
-    if (block.type === 'toolCall') toolNames.set(brandString<ToolCallId>(block.id), block.name)
+  for (const block of message.content) {
+    if (block.type !== 'tool-call') continue
+    // Empty-name calls are dropped by the conversion below; remember their ids
+    // so their orphaned results can be dropped in step.
+    if (isEmptyNameToolCall(block)) {
+      droppedToolCalls.add(block.id)
+      continue
+    }
+    toolNames.set(block.id, block.name)
   }
+  const assistant = toPiAssistant(message, onReplayDegrade)
   messages.push(assistant)
 }
 
@@ -219,6 +226,7 @@ function appendSharedHistory(
   options: GenerateOptions,
   messages: PiMessage[],
   toolNames: Map<ToolCallId, string>,
+  droppedToolCalls: Set<ToolCallId>,
   supportsMidConvoSystemMessages: boolean,
   onReplayDegrade?: (reason: string) => void,
 ): boolean {
@@ -239,7 +247,7 @@ function appendSharedHistory(
     return true
   }
   if (message.role === 'assistant') {
-    appendAssistant(message, messages, toolNames, onReplayDegrade)
+    appendAssistant(message, messages, toolNames, droppedToolCalls, onReplayDegrade)
     return true
   }
   return false
@@ -253,13 +261,20 @@ function textOnlyContext(
   assertSupportedHistory(options.messages)
   const split = splitSystemPrompt(options)
   const toolNames = new Map<ToolCallId, string>()
+  const droppedToolCalls = new Set<ToolCallId>()
   const messages: PiMessage[] = []
   for (const message of split.messages) {
     if (contentHasImage(message.content)) {
       throw new LlmError('pi-ai image conversion requires the durable attachment service', 'UNSUPPORTED_CONTENT')
     }
-    if (appendSharedHistory(message, options, messages, toolNames, supportsMidConvoSystemMessages, onReplayDegrade)) continue
+    if (appendSharedHistory(
+      message, options, messages, toolNames, droppedToolCalls,
+      supportsMidConvoSystemMessages, onReplayDegrade,
+    )) continue
     if (message.role === 'tool') {
+      // A result whose call was dropped as an empty-name tool call must go with
+      // it: replaying the orphan draws an upstream "no call for this output" 400.
+      if (droppedToolCalls.has(message.toolCallId)) continue
       messages.push(toolResultOf(message, toolNames, flattenText(message)))
       continue
     }
@@ -385,11 +400,16 @@ async function toPiContextWithImages(
     ref => offloadedImageText(ref, resolveImageAccess(ref)),
   )
   const toolNames = new Map<ToolCallId, string>()
+  const droppedToolCalls = new Set<ToolCallId>()
   const messages: PiMessage[] = []
 
   for (const message of exactMessages) {
-    if (appendSharedHistory(message, options, messages, toolNames, supportsMidConvoSystemMessages, onReplayDegrade)) continue
+    if (appendSharedHistory(
+      message, options, messages, toolNames, droppedToolCalls,
+      supportsMidConvoSystemMessages, onReplayDegrade,
+    )) continue
     if (message.role === 'tool') {
+      if (droppedToolCalls.has(message.toolCallId)) continue
       messages.push(toolResultOf(message, toolNames, userContent(message.content, requestImages, resolveImageAccess)))
       continue
     }

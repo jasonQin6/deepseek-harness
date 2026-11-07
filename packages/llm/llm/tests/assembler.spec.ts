@@ -102,11 +102,12 @@ describe('BlockAssembler', () => {
 
   it('assembles tool-call with generated id fallback when no id provided', () => {
     const assembler = new BlockAssembler()
-    assembler.push({ type: 'tool-call-delta', index: 0, argumentsDelta: '{}' } as StreamChunk)
-    // No id and no name provided — uses fallback id `call-{index}` and empty name
+    assembler.push({ type: 'tool-call-delta', index: 0, name: 'echo', argumentsDelta: '{}' } as StreamChunk)
+    // No id provided — uses fallback id `call-{index}` for a named call;
+    // a nameless open partial is dropped instead (see empty-name tests below)
     const blocks = assembler.blocks()
     expect(blocks).toEqual([
-      { type: 'tool-call', id: ToolCallId('call-0'), name: '', arguments: '{}' },
+      { type: 'tool-call', id: ToolCallId('call-0'), name: 'echo', arguments: '{}' },
     ])
   })
 
@@ -260,5 +261,44 @@ describe('BlockAssembler.interruptedBlocks', () => {
     assembler.push({ type: 'block-start', index: 1, blockType: 'mystery' } as unknown as StreamChunk)
     assembler.push({ type: 'block-start', index: 2, blockType: 'reasoning' })
     expect(assembler.interruptedBlocks()).toEqual([])
+  })
+})
+
+describe('BlockAssembler empty-name tool calls', () => {
+  it('drops a block-end tool call whose name is empty instead of persisting it', () => {
+    const assembler = new BlockAssembler()
+    assembler.push({ type: 'block-start', index: 0, blockType: 'text' })
+    assembler.push({ type: 'text-delta', index: 0, text: 'lead' })
+    assembler.push({
+      type: 'block-end',
+      index: 1,
+      block: { type: 'tool-call', id: ToolCallId('c1'), name: '', arguments: '{}' },
+    })
+    assembler.push({ type: 'finish', reason: { kind: 'tool-calls' } })
+    expect(assembler.blocks()).toEqual([{ type: 'text', text: 'lead' }])
+  })
+
+  it('drops an open tool-call partial that never received a name', () => {
+    const assembler = new BlockAssembler()
+    assembler.push({ type: 'block-start', index: 0, blockType: 'tool-call' })
+    assembler.push({ type: 'tool-call-delta', index: 0, id: ToolCallId('c1'), argumentsDelta: '{}' })
+    assembler.push({ type: 'finish', reason: { kind: 'stop' } })
+    expect(assembler.blocks()).toEqual([])
+  })
+
+  it('prunes replay entries alongside a dropped empty-name tool call', () => {
+    const assembler = new BlockAssembler()
+    assembler.push({ type: 'block-end', index: 0, block: { type: 'text', text: 'lead' } })
+    assembler.push({
+      type: 'block-end',
+      index: 1,
+      block: { type: 'tool-call', id: ToolCallId('c1'), name: '', arguments: '{}' },
+    })
+    assembler.push({
+      type: 'finish',
+      reason: { kind: 'tool-calls' },
+      replayState: { response: { responseId: 'resp-1' }, blocks: ['meta-0', 'meta-1'] },
+    })
+    expect(assembler.replayState).toEqual({ response: { responseId: 'resp-1' }, blocks: ['meta-0'] })
   })
 })

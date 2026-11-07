@@ -9,9 +9,10 @@
  */
 
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, MALFORMED_TOOL_CALL_CODE, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow'
+import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toPiReplayState } from './replay.ts'
 
@@ -122,7 +123,17 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
     }
     case 'error': {
       const text = message.errorMessage ?? 'pi-ai stream error'
-      return { kind: 'error', failure: { message: text, code: classifyPiAiError(text) } }
+      const code = classifyPiAiError(text)
+      return {
+        kind: 'error',
+        failure: {
+          message: text,
+          // pi-ai's own retryability read sees vendor wording our ladder misses
+          // (overloaded gateways, "upstream request failed" relays); when it asks
+          // for another attempt, treat the catch-all as a transient server fault.
+          code: code === 'PI_AI_ERROR' && isRetryableAssistantError(message) ? 'SERVER' : code,
+        },
+      }
     }
   }
 }
@@ -138,7 +149,8 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  * @param requestedModel - request model identity recorded for durable replay.
  * @returns the harness chunks, ending with `usage` then `finish`; throws
  *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event, or
- *   `MALFORMED_RESPONSE` when completed tool arguments are invalid. Length-limited
+ *   `MALFORMED_TOOL_CALL` when completed tool arguments are invalid or a call's
+ *   tool name is empty. Length-limited
  *   output retains its terminal reason so the assembler can discard incomplete calls.
  */
 export async function* toStreamChunks(
@@ -151,6 +163,7 @@ export async function* toStreamChunks(
   // in stream order), but we track ids per index for tool calls.
   const toolIds = new Map<number, { id: string; name: string }>()
   let argumentsError: string | undefined
+  let emptyNameError: string | undefined
 
   for await (const event of events) {
     switch (event.type) {
@@ -195,6 +208,14 @@ export async function* toStreamChunks(
         break
       }
       case 'toolcall_end':
+        // An empty name cannot be executed, and persisting the block poisons
+        // durable history: every later replay of it draws upstream schema 400s
+        // that no retry can clear. Refuse it like invalid arguments — the step
+        // fails and the retry policy re-rolls the model.
+        if (event.toolCall.name.length === 0) {
+          emptyNameError ??= `Tool call "${event.toolCall.id}": the model returned an empty tool name`
+          break
+        }
         if (event.toolCall.argumentsError !== undefined) {
           argumentsError ??= `Tool call "${event.toolCall.name}": ${event.toolCall.argumentsError}`
           break
@@ -215,7 +236,10 @@ export async function* toStreamChunks(
       case 'done':
         yield { type: 'usage', usage: mapUsage(event.message.usage) }
         if (argumentsError !== undefined && event.message.stopReason !== 'length') {
-          throw new LlmError(argumentsError, 'MALFORMED_RESPONSE')
+          throw new LlmError(argumentsError, MALFORMED_TOOL_CALL_CODE)
+        }
+        if (emptyNameError !== undefined && event.message.stopReason !== 'length') {
+          throw new LlmError(emptyNameError, MALFORMED_TOOL_CALL_CODE)
         }
         yield {
           type: 'finish',

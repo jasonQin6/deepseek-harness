@@ -148,6 +148,11 @@ function readReplayState(value: unknown): PiAiReplayState {
   }
 }
 
+/** Whether one durable block is an unexecutable empty-name tool call. */
+export function isEmptyNameToolCall(block: HarnessAssistantMessage['content'][number]): boolean {
+  return block.type === 'tool-call' && block.name.length === 0
+}
+
 /** Convert provider-neutral blocks without trusting them as same-model replay. */
 function foreignAssistant(message: HarnessAssistantMessage): AssistantMessage {
   const source = message.source
@@ -156,12 +161,17 @@ function foreignAssistant(message: HarnessAssistantMessage): AssistantMessage {
     switch (block.type) {
       case 'text': content.push({ type: 'text', text: block.text }); break
       case 'reasoning': content.push({ type: 'thinking', thinking: block.text }); break
-      case 'tool-call': content.push({
-        type: 'toolCall',
-        id: block.id,
-        name: block.name,
-        arguments: parseArguments(block.arguments),
-      }); break
+      // Empty-name calls are dropped rather than replayed: upstream schema
+      // validation rejects them, and no retry can clear durable history.
+      case 'tool-call': {
+        if (isEmptyNameToolCall(block)) break
+        content.push({
+          type: 'toolCall',
+          id: block.id,
+          name: block.name,
+          arguments: parseArguments(block.arguments),
+        }); break
+      }
       case 'image':
         throw new LlmError('pi-ai chat history cannot represent structured assistant image output', 'UNSUPPORTED_CONTENT')
       default:
@@ -189,33 +199,37 @@ function replayedAssistant(message: HarnessAssistantMessage, source: ModelMessag
   if (state.response.provider !== source.provider) return invalidReplay('provider does not match assistant source')
   if (state.response.model !== source.model) return invalidReplay('model does not match assistant source')
   if (state.blocks.length !== message.content.length) return invalidReplay('block count does not match assistant content')
-  const content: AssistantMessage['content'] = message.content.map((block, index) => {
+  const content: AssistantMessage['content'] = []
+  for (const [index, block] of message.content.entries()) {
+    // Empty-name calls are dropped rather than replayed (see foreignAssistant);
+    // surviving blocks keep their original replay alignment.
+    if (block.type === 'tool-call' && isEmptyNameToolCall(block)) continue
     const replay = state.blocks[index]
     if (replay === undefined || replay.type !== block.type) return invalidReplay(`block ${index} does not match assistant content`)
     switch (block.type) {
-      case 'text': return {
+      case 'text': content.push({
         type: 'text',
         text: block.text,
         ...replay.type === 'text' && replay.textSignature !== undefined ? { textSignature: replay.textSignature } : {},
-      }
-      case 'reasoning': return {
+      }); break
+      case 'reasoning': content.push({
         type: 'thinking',
         thinking: block.text,
         ...replay.type === 'reasoning' && replay.thinkingSignature !== undefined ? { thinkingSignature: replay.thinkingSignature } : {},
         ...replay.type === 'reasoning' && replay.redacted !== undefined ? { redacted: replay.redacted } : {},
-      }
-      case 'tool-call': return {
+      }); break
+      case 'tool-call': content.push({
         type: 'toolCall',
         id: block.id,
         name: block.name,
         arguments: parseArguments(block.arguments),
         ...replay.type === 'tool-call' && replay.thoughtSignature !== undefined ? { thoughtSignature: replay.thoughtSignature } : {},
         ...replay.type === 'tool-call' && replay.namespace !== undefined ? { namespace: replay.namespace } : {},
-      }
+      }); break
       /* v8 ignore next -- readReplayState rejects unknown replay tags, so an equal plugin-added Harness tag cannot reach this switch */
       default: return invalidReplay(`block ${index} has an unsupported Harness type`)
     }
-  })
+  }
   return {
     role: 'assistant',
     content,
@@ -226,7 +240,11 @@ function replayedAssistant(message: HarnessAssistantMessage, source: ModelMessag
     ...state.response.responseId === undefined ? {} : { responseId: state.response.responseId },
     ...state.response.providerThinkingLevel === undefined ? {} : { providerThinkingLevel: state.response.providerThinkingLevel },
     usage: emptyPiUsage(),
-    stopReason: state.response.stopReason,
+    // A toolUse whose every call was dropped is no longer a tool use: replaying
+    // the stale reason would present an assistant turn that calls nothing.
+    stopReason: state.response.stopReason === 'toolUse' && !content.some(piece => piece.type === 'toolCall')
+      ? 'stop'
+      : state.response.stopReason,
     timestamp: 0,
   }
 }

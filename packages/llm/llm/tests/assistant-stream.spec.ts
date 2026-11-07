@@ -474,7 +474,8 @@ describe('compact stream readers', () => {
     const assembled = assembleAssistantStream(stream)
 
     expect(assembled.blocks()).toStrictEqual(expanded.blocks())
-    expect(assembled.blocks().map(block => block.type)).toStrictEqual(['reasoning', 'text', 'tool-call', 'tool-call'])
+    // the nameless delta-only call at index 3 is dropped on both paths
+    expect(assembled.blocks().map(block => block.type)).toStrictEqual(['reasoning', 'text', 'tool-call'])
     expect(assembled.usage).toStrictEqual({ inputTokens: 3, outputTokens: 2 })
     expect(assembled.finish).toStrictEqual({ kind: 'tool-calls' })
     expect(assembled.replayState).toStrictEqual(expanded.replayState)

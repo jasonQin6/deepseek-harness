@@ -42,6 +42,25 @@ export const ACCOUNT_QUOTA_EXCEEDED_CODE = 'ACCOUNT_QUOTA'
 export const EMPTY_RESPONSE_CODE = 'EMPTY_RESPONSE'
 
 /**
+ * Canonical provider-neutral code for a model response whose own output was
+ * malformed where it cannot be persisted or executed: tool arguments that are
+ * not valid JSON, or a tool call with an empty name. These are sampling
+ * defects of the model itself — one re-roll of the same step almost always
+ * clears them, so retry policy treats them as safe to repeat. Persisting the
+ * block instead would poison every later replay of the history.
+ */
+export const MALFORMED_TOOL_CALL_CODE = 'MALFORMED_TOOL_CALL'
+
+/**
+ * Canonical provider-neutral code for a response that violated the provider's
+ * wire protocol (invalid SSE framing, event-type mismatches, unreadable
+ * replay state). Unlike {@link MALFORMED_TOOL_CALL_CODE} these failures are
+ * deterministic — the same request draws the same violation — so retry policy
+ * leaves them out of its default retryable set.
+ */
+export const MALFORMED_RESPONSE_CODE = 'MALFORMED_RESPONSE'
+
+/**
  * Canonical provider-neutral code for a credential that was supplied but
  * cannot be used — malformed rather than absent. Distinct from
  * `MISSING_CREDENTIAL` because the fix differs: correct the stored value

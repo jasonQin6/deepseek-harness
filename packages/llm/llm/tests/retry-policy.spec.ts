@@ -13,13 +13,16 @@ describe('provider retry policy', () => {
     expect(policy).toEqual({
       mode: 'normal',
       maxRetries: 5,
-      retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+      retryableCodes: ['EMPTY_RESPONSE', 'MALFORMED_TOOL_CALL', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
       initialDelayMs: 500,
       maxDelayMs: 10_000,
       jitterRatio: 0.1,
     })
     expect(Object.isFrozen(policy)).toBe(true)
     if (policy.mode !== 'normal') throw new Error('expected normal policy')
+    // Protocol violations stay out: they repeat deterministically, so a retry
+    // only re-bills the same failure.
+    expect(policy.retryableCodes).not.toContain('MALFORMED_RESPONSE')
     expect(Object.isFrozen(policy.retryableCodes)).toBe(true)
   })
 

@@ -93,7 +93,7 @@ describe('completed tool-call arguments through the public runtime', () => {
   ] as const)('%s rejects malformed completed arguments without successful replay', async (api, events) => {
     const raw = '{"value":"unfinished'
     const { chunks, assembler, server } = await collect(api, events(raw))
-    expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'MALFORMED_RESPONSE' } })
+    expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'MALFORMED_TOOL_CALL' } })
     expect(assembler.finish).toHaveProperty('failure.message', expect.stringContaining(raw))
     expect(assembler.replayState).toBeUndefined()
     expect(chunks.filter(chunk => chunk.type === 'finish')).toHaveLength(1)
@@ -103,7 +103,7 @@ describe('completed tool-call arguments through the public runtime', () => {
 
   it.each(['null', '[]', '42'])('rejects non-object completed arguments %s', async (raw) => {
     const { assembler } = await collect('openai-completions', completionsEvents(raw))
-    expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'MALFORMED_RESPONSE' } })
+    expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'MALFORMED_TOOL_CALL' } })
     expect(assembler.replayState).toBeUndefined()
   })
 
@@ -111,7 +111,7 @@ describe('completed tool-call arguments through the public runtime', () => {
     const raw = '{"value":"final-invalid'
     const { chunks, assembler } = await collect('openai-responses', responsesEvents(raw, '{"value":"valid-prefix"}'))
     expect(chunks).toContainEqual(expect.objectContaining({ type: 'tool-call-delta', argumentsDelta: '{"value":"valid-prefix"}' }))
-    expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'MALFORMED_RESPONSE' } })
+    expect(assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'MALFORMED_TOOL_CALL' } })
     expect(assembler.finish).toHaveProperty('failure.message', expect.stringContaining(raw))
     expect(assembler.replayState).toBeUndefined()
   })
@@ -119,7 +119,7 @@ describe('completed tool-call arguments through the public runtime', () => {
   it('retains the first completed-argument failure when several calls are invalid', async () => {
     const { assembler } = await collect('openai-responses', responsesEvents('[]', undefined, true, '[1]'))
     expect(assembler.finish).toEqual({ kind: 'error', failure: {
-      code: 'MALFORMED_RESPONSE', message: 'Tool call "count": Tool arguments must be a JSON object\n\nReceived arguments:\n[1]',
+      code: 'MALFORMED_TOOL_CALL', message: 'Tool call "count": Tool arguments must be a JSON object\n\nReceived arguments:\n[1]',
     } })
     expect(assembler.replayState).toBeUndefined()
   })
@@ -132,7 +132,7 @@ describe('completed tool-call arguments through the public runtime', () => {
     const { assembler } = await collect('openai-responses', events)
     expect(assembler.finish).toMatchObject({ kind: 'error' })
     expect(assembler.finish).toHaveProperty('failure.message', expect.stringContaining('upstream failure'))
-    expect(assembler.finish).not.toMatchObject({ failure: { code: 'MALFORMED_RESPONSE' } })
+    expect(assembler.finish).not.toMatchObject({ failure: { code: 'MALFORMED_TOOL_CALL' } })
     expect(assembler.replayState).toBeUndefined()
   })
 
@@ -189,10 +189,10 @@ describe('completed tool-call arguments through the public runtime', () => {
     const attempts = events.filter(event => event.type === 'assistant/attempt')
     expect(attempts).toHaveLength(1)
     expect(JSON.stringify(attempts)).toContain('call_valid|item_valid')
-    expect(JSON.stringify(attempts)).toContain('MALFORMED_RESPONSE')
+    expect(JSON.stringify(attempts)).toContain('MALFORMED_TOOL_CALL')
     expect(JSON.stringify(attempts)).not.toContain('replayState')
     expect(events.find(event => event.type === 'turn/end')).toMatchObject({
-      data: { reason: { kind: 'error', error: { code: 'MALFORMED_RESPONSE' } } },
+      data: { reason: { kind: 'error', error: { code: 'MALFORMED_TOOL_CALL' } } },
     })
     expect(server.requests).toHaveLength(1)
   })
