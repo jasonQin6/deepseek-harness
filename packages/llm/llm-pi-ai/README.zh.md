@@ -234,7 +234,7 @@ git add packages/llm/llm-pi-ai/src/provider-data.generated.ts
 
 #### 模型看到什么
 
-pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 分片。适配器把解析后的工具参数以原始 JSON 字符串传给 harness。如果 pi-ai 报告已完成调用的参数无效，本次尝试会在分派工具前以 `MALFORMED_RESPONSE` 失败，且不发布成功的回放状态。默认的普通重试策略不重试此错误码；显式重试策略仍然控制恢复。
+pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 分片。适配器把解析后的工具参数以原始 JSON 字符串传给 harness。如果 pi-ai 报告已完成调用的参数无效，或已完成调用的 name 为空，本次尝试会在分派工具前以可重试的 `MALFORMED_TOOL_CALL` 失败，且不发布成功的回放状态；重试一次该步骤即可清除采样缺陷。协议违规继续使用不可重试的 `MALFORMED_RESPONSE`。已存入的空名调用会连同应答它的工具结果一起从请求中丢弃，因此这条规则之前写入的 Session 可以正常回放；持久化内容仍是权威且保持不变。
 
 #### Token 影响
 

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-rc.1/pi-ai-malformed-tool-call/guide.md
+/:
+  en: ad47b5da6d9122eb
+  zh: 733372ae5b70845b
+/malformed-model-tool-calls-use-their-own-error-code:
+  en: 518e0e48359eda37
+  zh: fc7bb00184a781d5
+/malformed-model-tool-calls-use-their-own-error-code/change:
+  en: b7680dbcb5d5ffa9
+  zh: eb1f380c2b72b8a8
+/malformed-model-tool-calls-use-their-own-error-code/migration:
+  en: e73d1b633ea3b91f
+  zh: ee21b220981e0357
