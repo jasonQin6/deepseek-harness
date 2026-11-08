@@ -14,7 +14,8 @@ import type {
   RequestImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import type { Context as PiContext, ImageContent, Message as PiMessage, SystemMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
-import { isEmptyNameToolCall, toPiAssistant } from './replay.ts'
+import { isEmptyNameToolCall } from '@deepseek-ai/dsh-llm'
+import { toPiAssistant } from './replay.ts'
 import { requestImageDimensions } from '@deepseek-ai/dsh-attachment'
 import { DEFAULT_REQUEST_IMAGE_MAX_BYTES, DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET } from './config.ts'
 

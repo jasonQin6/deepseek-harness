@@ -72,17 +72,25 @@ describe('Messages stream', () => {
     [start, textEvents[1], ...end()],
     [start, { type: 'message_delta', delta: {}, usage: { input_tokens: -1 } }],
     [start, { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, textEvents[1]],
-    [start, { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: '', name: 'read', input: {} } }],
-    [start, { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'x', name: 'read', input: [] } }],
   ])('rejects malformed event ordering or fields %#', async (...values) => {
     await expect(chunks(translate(events(values as Record<string, unknown>[]), MODEL))).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
+  })
+
+  // The model miswrote its own tool call — the same sampling defect pi-ai
+  // reports as retryable MALFORMED_TOOL_CALL, not a wire-protocol violation.
+  it.each([
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: '', name: 'read', input: {} } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'x', name: '', input: {} } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'x', name: 'read', input: [] } },
+  ])('reports a model-miswritten tool call %# as retryable MALFORMED_TOOL_CALL', async (...values) => {
+    await expect(chunks(translate(events([start, ...values] as Record<string, unknown>[]), MODEL))).rejects.toMatchObject({ code: 'MALFORMED_TOOL_CALL' })
   })
 
   it.each(['{', '[]'])('refuses completed non-object tool JSON %s without repairing it', async (partial_json) => {
     await expect(chunks(translate(events([start,
       { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'a', name: 'read', input: {} } },
       { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json } },
-      { type: 'content_block_stop', index: 0 }, ...end('tool_use')]), MODEL))).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
+      { type: 'content_block_stop', index: 0 }, ...end('tool_use')]), MODEL))).rejects.toMatchObject({ code: 'MALFORMED_TOOL_CALL' })
   })
 
   it('refuses unsupported response content, empty responses and premature EOF', async () => {

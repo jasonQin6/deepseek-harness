@@ -9,6 +9,15 @@ import type {
 } from '@deepseek-ai/dsh-attachment'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 
+/**
+ * Whether one content block is a tool call no route can execute or name on the
+ * wire: a persisted empty-name call is dropped by every adapter's replay and by
+ * the shared assembler, so the rule lives once here.
+ */
+export function isEmptyNameToolCall(block: ContentBlock): boolean {
+  return block.type === 'tool-call' && block.name.length === 0
+}
+
 /** Execution-world path that model tools can use to read one normalized attachment. */
 export interface ImageAttachmentAccess {
   /** Absolute path to immutable normalized bytes; callers must treat it as read-only. */

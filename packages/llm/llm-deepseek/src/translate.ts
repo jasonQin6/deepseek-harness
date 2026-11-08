@@ -1,6 +1,6 @@
 /** Translate Messages events while preserving block order and cumulative usage. */
 
-import { LlmError, MALFORMED_RESPONSE_CODE, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { LlmError, MALFORMED_RESPONSE_CODE, MALFORMED_TOOL_CALL_CODE, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { object, replayState } from './replay.ts'
 import type { ReplayBlock } from './replay.ts'
@@ -53,8 +53,10 @@ function startBlock(event: Record<string, unknown>, index: number): Block {
       replay = { type: 'reasoning', ...native.signature === undefined ? {} : { signature: string(native.signature) } }
       break
     case 'tool_use':
-      content = { type: 'tool-call', id: ToolCallId(string(native.id)), name: string(native.name), arguments: JSON.stringify(object(native.input)) }
-      if (!content.id || !content.name) return malformed('empty tool identity')
+      content = { type: 'tool-call', id: ToolCallId(string(native.id)), name: string(native.name), arguments: JSON.stringify(object(native.input, MALFORMED_TOOL_CALL_CODE)) }
+      // A call the model itself miswrote (no id, no name, non-object input) is a
+      // sampling defect like pi-ai's: retryable, not a wire-protocol violation.
+      if (!content.id || !content.name) throw new LlmError('DeepSeek Messages stream: empty tool identity', MALFORMED_TOOL_CALL_CODE)
       replay = { type: 'tool-call' }
       break
     default: throw new LlmError(`DeepSeek Messages does not support response block ${String(native.type)}`, 'UNSUPPORTED_CONTENT')
@@ -152,8 +154,8 @@ export async function* translate(events: AsyncIterable<Record<string, unknown>>,
         for (const { content } of blocks.values()) {
           if (content.type !== 'tool-call') continue
           let parsed: unknown
-          try { parsed = JSON.parse(content.arguments) } catch (_invalidProviderToolJson) { return malformed('tool input is invalid JSON') }
-          object(parsed)
+          try { parsed = JSON.parse(content.arguments) } catch (_invalidProviderToolJson) { throw new LlmError('DeepSeek Messages stream: tool input is invalid JSON', MALFORMED_TOOL_CALL_CODE) }
+          object(parsed, MALFORMED_TOOL_CALL_CODE)
         }
       }
       usage.totalTokens = usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)

@@ -9,6 +9,7 @@
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { ToolCallId } from './brand.ts'
+import { isEmptyNameToolCall } from './content.ts'
 import { createAssistantMessage } from './message.ts'
 import type { AssistantMessage, ModelMessageSource } from './message.ts'
 import type { ContentBlock, FinishReason, ReplayEnvelope, StreamChunk, TokenUsage } from './types.ts'
@@ -142,8 +143,6 @@ export class BlockAssembler {
    */
   private assembled(): { blocks: ContentBlock[]; replay: ReplayEnvelope | undefined } {
     const all = this.order.map(index => this.assemble(this.mustGet(index), index))
-    const isEmptyNameToolCall = (block: ContentBlock): boolean =>
-      block.type === 'tool-call' && block.name.length === 0
     const keep = (block: ContentBlock): boolean =>
       this.finish.kind === 'max-tokens' ? block.type !== 'tool-call' : !isEmptyNameToolCall(block)
     const kept = all.some(block => !keep(block)) ? all.map(keep) : undefined

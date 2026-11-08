@@ -8,7 +8,7 @@
  * @module dsh-llm-pi-ai/replay
  */
 
-import { LlmError } from '@deepseek-ai/dsh-llm'
+import { isEmptyNameToolCall, LlmError } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage as HarnessAssistantMessage, ModelMessageSource, ReplayEnvelope } from '@deepseek-ai/dsh-llm'
 import type { Api, AssistantMessage, ToolCall, Usage as PiUsage } from '@earendil-works/pi-ai'
 
@@ -146,11 +146,6 @@ function readReplayState(value: unknown): PiAiReplayState {
     response: response as unknown as PiAiReplayResponse,
     blocks: blocks as PiAiReplayBlock[],
   }
-}
-
-/** Whether one durable block is an unexecutable empty-name tool call. */
-export function isEmptyNameToolCall(block: HarnessAssistantMessage['content'][number]): boolean {
-  return block.type === 'tool-call' && block.name.length === 0
 }
 
 /** Convert provider-neutral blocks without trusting them as same-model replay. */

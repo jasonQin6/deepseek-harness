@@ -1,6 +1,6 @@
 /** Map system snapshots, tool changes, and conversation turns to Messages using the configured route capability. */
 
-import { LlmError, requestImageHandleText } from '@deepseek-ai/dsh-llm'
+import { isEmptyNameToolCall, LlmError, requestImageHandleText } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, ImageAttachmentAccessResolver, Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type { DeepSeekConnectionOptions as Connection } from './types.ts'
@@ -21,11 +21,6 @@ function toolInput(raw: string): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
-}
-
-/** Whether one durable block is a tool call no route can execute or name on the wire. */
-function isEmptyNameToolCall(block: ContentBlock): boolean {
-  return block.type === 'tool-call' && block.name.length === 0
 }
 
 function assistant(message: Message, model: string, onReplayDegrade?: (reason: string) => void): WireBlock[] {
@@ -133,6 +128,9 @@ export function serialize(
     }
     // A result whose call was dropped as unexecutable must go with it: Messages
     // rejects an output without its call, and the durable Session keeps both.
+    // Corner: a dropped result no longer retains a turn for a pending in-history
+    // system update, so such a history fails with UNSUPPORTED_CONTENT here; it
+    // failed before the drop too (the provider rejected the empty name).
     if (message.role === 'tool' && droppedCalls.has(message.toolCallId)) continue
     const content: WireBlock[] = message.role === 'assistant'
       ? assistant(message, options.model, onReplayDegrade)
